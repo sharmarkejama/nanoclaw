@@ -338,6 +338,9 @@ function buildMounts(
  * Sync skill symlinks in .claude-shared/skills/ to match the container.json
  * selection. Each symlink points to a container path (/app/skills/<name>)
  * so it's dangling on the host but valid inside the container.
+ *
+ * On Windows, dangling symlinks require SeCreateSymbolicLinkPrivilege, so we
+ * copy the source directory from container/skills/<name> instead.
  */
 function syncSkillSymlinks(claudeDir: string, containerConfig: import('./container-config.js').ContainerConfig): void {
   const skillsDir = path.join(claudeDir, 'skills');
@@ -365,22 +368,25 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
   }
 
   const desiredSet = new Set(desired);
+  const isWindows = process.platform === 'win32';
 
-  // Remove symlinks not in the desired set
+  // Remove stale skill entries not in the desired set
   for (const entry of fs.readdirSync(skillsDir)) {
+    if (desiredSet.has(entry)) continue;
     const entryPath = path.join(skillsDir, entry);
-    let isSymlink = false;
     try {
-      isSymlink = fs.lstatSync(entryPath).isSymbolicLink();
+      const stat = fs.lstatSync(entryPath);
+      if (stat.isSymbolicLink()) {
+        fs.unlinkSync(entryPath);
+      } else if (isWindows && stat.isDirectory()) {
+        fs.rmSync(entryPath, { recursive: true });
+      }
     } catch {
       continue;
     }
-    if (isSymlink && !desiredSet.has(entry)) {
-      fs.unlinkSync(entryPath);
-    }
   }
 
-  // Create symlinks for desired skills (container path targets)
+  // Create skill entries for desired skills
   for (const skill of desired) {
     const linkPath = path.join(skillsDir, skill);
     let exists = false;
@@ -391,7 +397,15 @@ function syncSkillSymlinks(claudeDir: string, containerConfig: import('./contain
       /* missing */
     }
     if (!exists) {
-      fs.symlinkSync(`/app/skills/${skill}`, linkPath);
+      if (isWindows) {
+        // Copy from host source — symlinks to container paths need elevated privileges on Windows
+        const srcDir = path.join(sharedSkillsDir, skill);
+        if (fs.existsSync(srcDir)) {
+          fs.cpSync(srcDir, linkPath, { recursive: true });
+        }
+      } else {
+        fs.symlinkSync(`/app/skills/${skill}`, linkPath);
+      }
     }
   }
 }

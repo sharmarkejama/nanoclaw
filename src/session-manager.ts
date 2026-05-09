@@ -296,7 +296,10 @@ function extractAttachmentFiles(
       });
     }
 
-    const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', messageId);
+    // Colons are invalid in Windows path components; sanitize for the host FS.
+    // localPath must match so the container can find the file via its mount.
+    const safeMsgDir = process.platform === 'win32' ? messageId.replace(/:/g, '_') : messageId;
+    const inboxDir = path.join(sessionDir(agentGroupId, sessionId), 'inbox', safeMsgDir);
 
     // Refuse to mkdir through a symlink that the container may have pre placed
     // at inboxDir. With recursive:true, mkdirSync would silently no op on a
@@ -342,7 +345,7 @@ function extractAttachmentFiles(
     }
 
     att.name = filename;
-    att.localPath = `inbox/${messageId}/${filename}`;
+    att.localPath = `inbox/${safeMsgDir}/${filename}`;
     delete att.data;
     changed = true;
     log.debug('Saved attachment to inbox', { messageId, filename, size: att.size });
